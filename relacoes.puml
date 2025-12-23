@@ -1,0 +1,111 @@
+@startuml
+
+skinparam componentStyle uml2
+skinparam packageStyle rectangle
+
+' Cores para facilitar a leitura visual
+skinparam class {
+    BackgroundColor<<Infra>> LightGray
+    BackgroundColor<<Interface>> Wheat
+    BackgroundColor<<Strategy>> LightBlue
+    BackgroundColor<<Action>> LightGreen
+    BackgroundColor<<Shared>> LightPink
+}
+
+package "Products Module (Orchestrator)" {
+    class ProductsController {
+        + create(body)
+        + redeem(id, amount)
+    }
+
+    class ProductsFactory {
+        - strategyMap: Record<string, IProductOperations>
+        + getStrategy(type): IProductOperations
+    }
+
+    interface IProductOperations <<Interface>> {
+        + create(data): Promise
+        + redeem(id, amount): Promise
+        + invest(id, amount): Promise
+    }
+}
+
+package "Strategies (Business Logic)" {
+    
+    package "CDB Module" {
+        class CDBStrategy <<Strategy>> {
+            + create()
+            + redeem()
+        }
+
+        class CreateCDBService <<Action>> {
+            + execute()
+        }
+        
+        class RedeemCDBService <<Action>> {
+            + execute()
+        }
+    }
+
+    package "LCA Module" {
+        class LCAStrategy <<Strategy>> {
+            + create()
+            + redeem()
+        }
+
+        class CreateLCAService <<Action>> {
+            + execute()
+        }
+        
+        class RedeemLCAService <<Action>> {
+            + execute()
+        }
+    }
+
+    package "Shared Fixed Income Module" {
+        class BaseTaxService <<Shared>> {
+            + calculateIOF(days)
+            + calculateIR(days)
+        }
+    }
+}
+
+package "Shared Infrastructure" {
+    class DatabaseWrapper <<Infra>> {
+        + save()
+        + update()
+        + findOne()
+    }
+}
+
+' RELACIONAMENTOS
+
+' 1. Controller pede a Factory
+ProductsController --> ProductsFactory : 1. getStrategy(type)
+
+' 2. Factory retorna a interface, mas instancia a Strategy concreta
+ProductsFactory o-- CDBStrategy
+ProductsFactory o-- LCAStrategy
+ProductsFactory ..> IProductOperations : Returns
+
+' 3. Strategies implementam o contrato
+CDBStrategy ..|> IProductOperations
+LCAStrategy ..|> IProductOperations
+
+' 4. Strategy atua como Facade para os Services (Actions)
+CDBStrategy --> CreateCDBService
+CDBStrategy --> RedeemCDBService
+LCAStrategy --> CreateLCAService
+LCAStrategy --> RedeemLCAService
+
+' 5. Services acessam o Banco (Infra)
+CreateCDBService --> DatabaseWrapper
+RedeemCDBService --> DatabaseWrapper
+CreateLCAService --> DatabaseWrapper
+RedeemLCAService --> DatabaseWrapper
+
+' 6. Services reutilizam lógica comum (Shared)
+CreateCDBService --> BaseTaxService : Uses IOF/IR logic
+CreateLCAService --> BaseTaxService : Uses only IOF logic
+
+@enduml
