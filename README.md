@@ -9,7 +9,7 @@
 6. [Exemplo de Implementação](#6-exemplo-de-implementação)
 7. [CLI NestJS: Geração de Módulos e Serviços](#7-cli-nestjs-geração-de-módulos-e-serviços)
 8. [Guia Operacional: Adição de um Novo Produto (LCA)](#8-guia-operacional-adição-de-um-novo-produto-lca)
-9. [Glossário](#9-glossário)
+9. [Adendo A: Otimização de Boilerplate com Custom Providers](#9-adendo-a-otimização-de-boilerplate-com-custom-providers)
 
 ---
 
@@ -433,4 +433,107 @@ export class FabricaProdutos {
 }
 ```
 
+# Adendo A: Otimização de Boilerplate com Custom Providers
 
+## 1. Contexto
+Na arquitetura padrão apresentada, a classe `EstrategiaCdb` atua como uma **Fachada (Facade)**. Embora útil para encapsulamento, em cenários onde ela apenas repassa a chamada para as Actions (`return this.action.execute()`), ela se torna uma "classe casca" (boilerplate desnecessário).
+
+Este adendo propõe uma **forma avançada** de declarar estratégias usando o recurso `useFactory` do NestJS, eliminando o arquivo físico da estratégia e definindo o comportamento diretamente na montagem do módulo.
+
+---
+
+## 2. A Mudança Estrutural
+
+### Como era (Abordagem Clássica)
+Havia um arquivo físico `estrategia-cdb.service.ts` que precisava ser criado, testado e mantido apenas para fazer o "wiring" (ligação).
+
+```text
+src/modulos/produtos/estrategias/cdb/
+├── acoes/                  # Lógica Real
+│   ├── criar-cdb.service.ts
+│   └── resgatar-cdb.service.ts
+├── estrategia-cdb.service.ts  ❌ (REMOVIDO NESTA ABORDAGEM)
+└── cdb.module.ts
+```
+### Como fica (Abordagem Otimizada)
+A estratégia passa a ser um Objeto Dinâmico montado dentro do cdb.module.ts.
+
+2.1. Ajuste no Módulo do Produto (cdb.module.ts)
+Em vez de declarar uma classe nos providers, usamos um Factory Provider.
+
+```typescript
+import { Module } from '@nestjs/common';
+import { CriarCdbService } from './acoes/criar-cdb.service';
+import { ResgatarCdbService } from './acoes/resgatar-cdb.service';
+import { IOperacoesProduto } from '../../interfaces/operacoes-produto.interface';
+
+// 1. Definimos um TOKEN único para injeção
+export const CDB_STRATEGY_TOKEN = 'TOKEN_ESTRATEGIA_CDB';
+
+@Module({
+  imports: [ /* ... Módulos compartilhados ... */ ],
+  providers: [
+    CriarCdbService,    // Ação (Provider Simples)
+    ResgatarCdbService, // Ação (Provider Simples)
+
+    // 2. A Mágica: Criamos a estratégia dinamicamente
+    {
+      provide: CDB_STRATEGY_TOKEN,
+      useFactory: (
+        criador: CriarCdbService, 
+        resgatador: ResgatarCdbService
+      ): IOperacoesProduto => { // O TypeScript garante que o objeto respeite a interface
+        
+        return {
+          // Mapeamos os métodos da interface para as Actions
+          criar: (dados) => criador.executar(dados),
+          
+          resgatar: (id, valor) => resgatador.executar(id, valor),
+          
+          // Podemos implementar métodos simples inline, sem criar arquivos
+          aportar: async () => { throw new Error('CDB não suporta aporte nesta versão'); },
+          
+          calcularCotacao: async () => 1
+        };
+      },
+      // Injetamos as dependências necessárias para a factory funcionar
+      inject: [CriarCdbService, ResgatarCdbService],
+    },
+  ],
+  // Exportamos o Token para que a Fábrica possa usar
+  exports: [CDB_STRATEGY_TOKEN] 
+})
+export class CdbModule {}
+```
+2.2. Ajuste na Fábrica (fabrica-produtos.service.ts)
+A fábrica agora injeta o token, não mais uma classe.
+
+```typescript
+import { Inject, Injectable } from '@nestjs/common';
+import { IOperacoesProduto } from '../interfaces/operacoes-produto.interface';
+import { CDB_STRATEGY_TOKEN } from '../estrategias/cdb/cdb.module';
+
+@Injectable()
+export class FabricaProdutos {
+  private mapa: Record<string, IOperacoesProduto> = {};
+
+  constructor(
+    // Usamos o decorator @Inject com o Token exportado pelo módulo
+    @Inject(CDB_STRATEGY_TOKEN) private estrategiaCdb: IOperacoesProduto
+  ) {
+    this.mapa['CDB'] = estrategiaCdb;
+  }
+  
+  // O resto da classe permanece idêntico
+}
+```
+
+## 3. Prós e Contras da Troca
+
+
+| Característica | Abordagem Clássica (Classe) | Abordagem Otimizada (useFactory) |
+|---|---|---|
+| **Arquivos** | Mais arquivos (`.service.ts` extra). | Menos arquivos (Definição no Módulo). |
+| **Legibilidade** | Explícita. Fácil para juniores. | Mais densa. Exige conhecimento de DI do NestJS. |
+| **Boilerplate** | Alto (Repetição de métodos delegados). | Baixo (Mapeamento direto objeto-função). |
+| **Refatoração** | Alterar a interface exige mexer no arquivo da classe. | Alterar a interface exige mexer no `module.ts`. |
